@@ -1,0 +1,328 @@
+---
+title: "Visuals Pipeline"
+author: "Laxchan Florence Angelo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Pipeline
+
+## Needed packages
+```{r}
+library(tidyverse)
+library(gridExtra)
+library(here)
+library(gtsummary)
+```
+
+
+#Relative Pfad zu CSV bauen in Daten_von
+```{r}
+
+here() # shows the path we are at currently
+
+data_from <- here("my_work", "dnns", "Auswertung") #Build path to the data you want to plot
+
+temporary <-  dir(path = data_from,
+                  pattern="\\.csv$") #double backslash to make dot match literal dot (default dot= any), $ matches end of string
+
+Paths_csv <- paste0(data_from, "/", temporary) # build paths to each file 
+
+myfiles <- map(Paths_csv, \(x) read_csv(x)) # Map every csv data to a list
+
+names(myfiles) <- gsub("\\.csv$", "", temporary) # Name list of data according 
+
+myfiles
+
+```
+
+
+### Data preparation
+```{r}
+training <- map(myfiles, \(x) filter(x, phase=="train") %>% #Extract training Data
+               group_by(run, epoch) %>% #Group dataset into 20 runs and in every run make groups of 6 because of epochs
+               mutate(hit = if_else(ground_truth == prediction, 1, 0), # 1 if Predictions is equal to ground truth, else 0
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), # Count right predicions on the go 
+           trials= seq_along(along.with = epoch), # Count number of pictures shown to architecture in respective epoch
+           running_percentage = nr_of_hits_in_this_epoch/trials, # Calculate acuracy after each picture
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) # Calculate avg accuracy in each epoch 
+
+training_sliced <- map(training, \(x) slice(x, max(trials))) #slicing last computed accuracy per epoch 
+
+
+train_epoch_avg <- map(training_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+
+testing <- map(myfiles, \(x) filter(x, phase=="test") %>%
+               group_by(run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) 
+
+
+testing_sliced <- map(testing, \(x) slice(x, max(trials)))
+
+test_epoch_avg <- map(testing_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+```
+
+## List of Plots
+### Accuracy Training Plots
+```{r}
+name_training <- names(training) %>% 
+  str_replace(pattern = "_", replacement = " \nTrainingsphase: ")
+
+#Pretty machen
+Training_accuracy_plots <- pmap(list(training_sliced, name_training, train_epoch_avg), \(x, y, z) ggplot(x, aes(x=as.factor(epoch)))+
+         geom_point(data = x, aes(y= percentage_epochs, colour= as.factor(epoch)), position = position_jitter(width = 0.1,
+                                                                                                              seed = 42))+
+       geom_point(data = z, aes(y= avg, x=as.factor(epoch)), shape=6)+
+         geom_line(data = z, aes(x=epoch, y= avg, colour= "red"))+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("Architecture: ", y))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))+
+        theme(legend.position="none")
+      )
+```
+
+### Accuracy Testing Plots
+```{r}
+name_testing <- names(testing) %>% 
+  str_replace(pattern = "_", replacement = " \nTestphase: ")
+
+Testing_accuracy_plots <- pmap(list(testing_sliced, name_testing, test_epoch_avg), \(x, y, z) ggplot(x, aes(x=as.factor(epoch)))+
+         geom_point(data = x, aes(y= percentage_epochs, colour= as.factor(epoch)), position = position_jitter(width = 0.1, seed = 42))+
+       geom_point(data = z, aes(y= avg, x=as.factor(epoch)), shape=6)+
+         geom_line(data = z, aes(x=epoch, y= avg, colour= "red"))+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("Architecture: ", y))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))+
+       theme(legend.position="none")
+     )
+```
+
+#testing analyze
+```{r}
+ood1 <- ".ood1" 
+ood1bool <- map(myfiles, \(x) pull(x, image_name) %>%  str_detect(ood1))
+ood1_raw <- map2(myfiles, ood1bool, \(x,y) ungroup(x) %>% filter(y))
+
+
+ood2 <- ".ood2" 
+ood2bool <- map(myfiles, \(x) pull(x, image_name) %>%  str_detect(ood2))
+ood2_raw <- map2(myfiles, ood2bool, \(x,y) ungroup(x) %>% filter(y))
+
+
+ood3 <- ".ood3" 
+ood3bool <- map(myfiles, \(x) pull(x, image_name) %>%  str_detect(ood3))
+ood3_raw <- map2(myfiles, ood3bool, \(x,y) ungroup(x) %>% filter(y))
+
+
+iid <- ".iid" 
+iidbool <- map(myfiles, \(x) pull(x, image_name) %>%  str_detect(iid))
+iid_raw <- map2(myfiles, iidbool, \(x,y) ungroup(x) %>% filter(y))
+
+
+ood1_data <- map(ood1_raw, \(x) group_by(x, run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials)))
+
+ood2_data <- map(ood2_raw, \(x) group_by(x, run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials)))
+
+ood3_data <- map(ood3_raw, \(x) group_by(x, run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials)))
+
+iid_data <- map(iid_raw, \(x) group_by(x, run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials)))
+
+
+
+ood1_slice <- map(ood1_data, \(x) slice(x, max(trials)))
+
+ood2_slice <- map(ood2_data, \(x) slice(x, max(trials)))
+
+ood3_slice <- map(ood3_data, \(x) slice(x, max(trials)))
+
+iid_slice <- map(iid_data, \(x) slice(x, max(trials)))
+
+
+ood1_avg <- map(ood1_slice, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+ood2_avg <- map(ood2_slice, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+ood3_avg <- map(ood3_slice, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+iid_avg <- map(iid_slice, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+```
+
+```{r}
+
+name_ood1 <- names(testing) %>% 
+  str_replace(pattern = "_", replacement = " \nCategory: OOD1 \nTestphase: ")
+
+ood1_plots <-  pmap(list(ood1_slice, name_ood1, ood1_avg), \(x, y, z) ggplot(x, aes(x=as.factor(epoch)))+
+         geom_point(data = x, aes(y= percentage_epochs, colour= as.factor(epoch)), position = position_jitter(width = 0.1, seed = 42))+
+       geom_point(data = z, aes(y= avg, x=as.factor(epoch)), shape=6)+
+         geom_line(data = z, aes(x=epoch, y= avg, colour= "red"))+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("Architecture: ", y))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))+
+        theme(legend.position="none")
+      )
+ 
+ name_ood2 <- names(testing) %>% 
+  str_replace(pattern = "_", replacement = " \nCategory: OOD2 \nTestphase: ")
+
+ood2_plots <-  pmap(list(ood2_slice, name_ood2, ood2_avg), \(x, y, z) ggplot(x, aes(x=as.factor(epoch)))+
+         geom_point(data = x, aes(y= percentage_epochs, colour= as.factor(epoch)), position = position_jitter(width = 0.1, seed = 42))+
+       geom_point(data = z, aes(y= avg, x=as.factor(epoch)), shape=6)+
+         geom_line(data = z, aes(x=epoch, y= avg, colour= "red"))+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("Architecture: ", y))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))+
+        theme(legend.position="none")
+      )
+ 
+ name_ood3 <- names(testing) %>% 
+  str_replace(pattern = "_", replacement = " \nCategory: OOD3 \nTestphase: ")
+
+ood3_plots <-  pmap(list(ood3_slice, name_ood3, ood3_avg), \(x, y, z) ggplot(x, aes(x=as.factor(epoch)))+
+         geom_point(data = x, aes(y= percentage_epochs, colour= as.factor(epoch)), position = position_jitter(width = 0.1, seed = 42))+
+       geom_point(data = z, aes(y= avg, x=as.factor(epoch)), shape=6)+
+         geom_line(data = z, aes(x=epoch, y= avg, colour= "red"))+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("Architecture: ", y))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))+
+        theme(legend.position="none")
+      )
+ 
+ name_iid <- names(testing) %>% 
+  str_replace(pattern = "_", replacement = " \nCategory: IID \nTestphase: ")
+
+iid_plots <-  pmap(list(iid_slice, name_iid, iid_avg), \(x, y, z) ggplot(x, aes(x=as.factor(epoch)))+
+         geom_point(data = x, aes(y= percentage_epochs, colour= as.factor(epoch)), position = position_jitter(width = 0.1, seed = 42))+
+       geom_point(data = z, aes(y= avg, x=as.factor(epoch)), shape=6)+
+         geom_line(data = z, aes(x=epoch, y= avg, colour= "red"))+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("Architecture: ", y))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))+
+        theme(legend.position="none")
+      )
+```
+
+### Work in progres
+
+
+# Saving Plots as png
+
+```{r}
+
+library(patchwork)
+wrap_plots(Training_accuracy_plots) %>% 
+   ggsave(filename="Training_accuracy_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+wrap_plots(Testing_accuracy_plots) %>% 
+   ggsave(filename="Testing_accuracy_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+wrap_plots(ood1_plots) %>% 
+   ggsave(filename="ood1_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+
+wrap_plots(ood2_plots) %>% 
+   ggsave(filename="ood2_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+
+wrap_plots(ood3_plots) %>% 
+   ggsave(filename="ood3_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+
+wrap_plots(iid_plots) %>% 
+   ggsave(filename="iid_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+```
+
+
+
+
+
+
+
+
+
+

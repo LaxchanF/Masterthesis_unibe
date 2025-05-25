@@ -1,0 +1,277 @@
+---
+title: "Visuals Pipeline"
+author: "Laxchan Florence Angelo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Pipeline
+
+## Needed packages
+
+```{r}
+library(tidyverse)
+library(gridExtra)
+library(here)
+library(gtsummary)
+```
+
+## Build realtive Path to the .csv files
+
+### Global Paths
+```{r}
+here() # shows the path we are at currently
+data_from <- here("my_work", "dnns", "Auswertung") #Build path to the data you want to plot
+```
+
+### Diverse file extraction for flat plots across models
+
+```{r}
+diverse <-  dir(path = data_from,
+                  pattern="*diverse.csv$") #double backslash to make dot match literal dot (default dot= any), $ matches end 
+diverse_csv <- paste0(data_from, "/", diverse) # build paths to each file 
+diverse_files <- map(diverse_csv, \(x) read_csv(x)) # Map every csv data to a list
+names(diverse_files) <- gsub("\\_diverse.csv$", "", diverse) # Name list of data according 
+diverse_files
+```
+
+### Prototype file extraction for flat plots across models
+
+```{r}
+prototype <-  dir(path = data_from,
+                  pattern="*prototype.csv$") #double backslash to make dot match literal dot (default dot= any), $ matches end
+prototype_csv <- paste0(data_from, "/", prototype) # build paths to each file 
+prototype_files <- map(prototype_csv, \(x) read_csv(x)) # Map every csv data to a list
+names(prototype_files) <- gsub("\\_prototype.csv$", "", prototype) # Name list of data according
+```
+
+# Data preparation
+
+## Diverse
+
+```{r}
+diverse_training <- map(diverse_files, \(x) filter(x, phase=="train") %>% #Extract training Data
+               group_by(run, epoch) %>% #Group dataset into 20 runs and in every run make groups of 6 because of epochs
+               mutate(hit = if_else(ground_truth == prediction, 1, 0), # 1 if Predictions is equal to ground truth, else 0
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), # Count right predicions on the go 
+           trials= seq_along(along.with = epoch), # Count number of pictures shown to architecture in respective epoch
+           running_percentage = nr_of_hits_in_this_epoch/trials, # Calculate acuracy after each picture
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) # Calculate avg accuracy in each epoch 
+
+diverse_training_sliced <- map(diverse_training, \(x) slice(x, max(trials))) #slicing last computed accuracy per epoch 
+
+
+diverse_train_epoch_avg <- map(diverse_training_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+
+diverse_testing <- map(diverse_files, \(x) filter(x, phase=="test") %>%
+               group_by(run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) 
+
+
+diverse_testing_sliced <- map(diverse_testing, \(x) slice(x, max(trials)))
+
+diverse_test_epoch_avg <- map(diverse_testing_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+```
+
+## Prototype
+
+```{r}
+prototype_training <- map(prototype_files, \(x) filter(x, phase=="train") %>% #Extract training Data
+               group_by(run, epoch) %>% #Group dataset into 20 runs and in every run make groups of 6 because of epochs
+               mutate(hit = if_else(ground_truth == prediction, 1, 0), # 1 if Predictions is equal to ground truth, else 0
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), # Count right predicions on the go 
+           trials= seq_along(along.with = epoch), # Count number of pictures shown to architecture in respective epoch
+           running_percentage = nr_of_hits_in_this_epoch/trials, # Calculate acuracy after each picture
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) # Calculate avg accuracy in each epoch 
+
+prototype_training_sliced <- map(prototype_training, \(x) slice(x, max(trials))) #slicing last computed accuracy per epoch 
+
+
+prototype_train_epoch_avg <- map(prototype_training_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+
+prototype_testing <- map(prototype_files, \(x) filter(x, phase=="test") %>%
+               group_by(run, epoch) %>%
+               mutate(hit = if_else(ground_truth == prediction, 1, 0),
+           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
+           trials= seq_along(along.with = epoch), 
+           running_percentage = nr_of_hits_in_this_epoch/trials, 
+           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) 
+
+
+prototype_testing_sliced <- map(prototype_testing, \(x) slice(x, max(trials)))
+
+prototype_test_epoch_avg <- map(prototype_testing_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+      group_by(epoch) %>% 
+      mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
+    unique())
+
+```
+
+# Make plots with accuracy across models.
+
+## Diverse accuracy
+
+```{r}
+diverse_flat_train_epoch_avg <- diverse_train_epoch_avg %>%
+  imap_dfr(~ tibble(
+    model = .y,
+    epoch = .x$epoch,
+    accuracy = .x$avg
+  ))
+
+diverse_across_training <- ggplot(diverse_flat_train_epoch_avg, aes(x= as.factor(epoch), y = accuracy, colour = as.factor(model), group = model)) +
+    geom_point(size = 3)+
+         geom_line()+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("DNN Training: Diverse"))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))
+
+diverse_flat_test_epoch_avg <- diverse_test_epoch_avg %>%
+  imap_dfr(~ tibble(
+    model = .y,
+    epoch = .x$epoch,
+    accuracy = .x$avg
+  ))
+
+diverse_across_test <- ggplot(diverse_flat_test_epoch_avg, aes(x= as.factor(epoch), y = accuracy, colour = as.factor(model), group = model)) +
+    geom_point(size = 3)+
+         geom_line()+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("DNN Testing: Diverse"))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))
+```
+
+## Prototype
+
+```{r}
+prototype_flat_train_epoch_avg <- prototype_train_epoch_avg %>%
+  imap_dfr(~ tibble(
+    model = .y,
+    epoch = .x$epoch,
+    accuracy = .x$avg
+  ))
+
+prototype_across_training <- ggplot(prototype_flat_train_epoch_avg, aes(x= as.factor(epoch), y = accuracy, colour = as.factor(model), group = model)) +
+    geom_point(size = 3)+
+         geom_line()+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("DNN Training: Prototype"))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))
+
+prototype_flat_test_epoch_avg <- prototype_test_epoch_avg %>%
+  imap_dfr(~ tibble(
+    model = .y,
+    epoch = .x$epoch,
+    accuracy = .x$avg
+  ))
+
+prototype_across_test <- ggplot(prototype_flat_test_epoch_avg, aes(x= as.factor(epoch), y = accuracy, colour = as.factor(model), group = model)) +
+    geom_point(size = 3)+
+         geom_line()+
+        geom_hline(yintercept = 1/3, colour = "black", size = 1)+
+       theme_bw()+
+      labs(title = paste0("DNN Testing: Prototype"))+
+        xlab(label = "Epoch")+
+        ylab(label = "Accuracy")+
+        scale_y_continuous(expand = c(0, 0), limits = c(0,1.1))
+```
+
+# Final products
+
+## Training
+
+### Diverse:
+```{r}
+diverse_across_training
+```
+
+### Prototype:
+```{r}
+prototype_across_training
+```
+
+## Testing
+
+### Diverse:
+```{r}
+diverse_across_test
+```
+
+### Prototpe:
+```{r}
+prototype_across_test
+```
+# Save as .png
+
+```{r}
+
+library(patchwork)
+wrap_plots(Training_accuracy_plots) %>% 
+   ggsave(filename="Training_accuracy_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+wrap_plots(Testing_accuracy_plots) %>% 
+   ggsave(filename="Testing_accuracy_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+wrap_plots(ood1_plots) %>% 
+   ggsave(filename="ood1_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+
+wrap_plots(ood2_plots) %>% 
+   ggsave(filename="ood2_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+
+wrap_plots(ood3_plots) %>% 
+   ggsave(filename="ood3_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+
+wrap_plots(iid_plots) %>% 
+   ggsave(filename="iid_plots.png", 
+        height = 40,
+        width = 40,
+        units = "cm") #hier Name ändern
+
+```

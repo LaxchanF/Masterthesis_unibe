@@ -1,0 +1,84 @@
+---
+title: "3d visualization"
+author: "Laxchan Florence Angelo"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+```{r}
+
+
+library(tidyverse)
+
+
+#read data
+daten_namen <- dir(pattern = "*.csv")
+rohdaten <- map(daten_namen, \(x) read.csv(x) %>% 
+                  select(-run))
+names(rohdaten) <- tools::file_path_sans_ext(daten_namen)
+
+#preprocess data, no calculation yet. creating angle category to filter easier
+daten <- map(rohdaten, \(x) {
+  x %>%
+    mutate(
+      image_name = basename(image_name),
+      angle = str_extract(image_name, "(?<=z_)-?\\d+(?=\\.png)"),
+      hit = if_else(ground_truth == prediction, 1, 0)
+    ) %>% 
+  group_by(phase)
+})
+
+
+
+# Extract Train and Test
+traindaten <- map(daten, \(x) filter(x, phase == "train") %>% ungroup())
+testdaten <- map(daten, \(x) filter(x, phase == "test") %>% ungroup())
+  
+#nest into epochs, disregard runs (wie durchschnitt von run)
+epochs <- map(testdaten, \(x) group_by(x, epoch) %>% nest())
+
+
+## Nach Angles trennen und nesten
+results_nested <- map(epochs, \(arch) {
+  map(arch$data, \(x) {
+    x %>%
+      group_by(angle) %>%
+      mutate(nr_hits = cumsum(hit),
+             trial = seq_along(phase),
+             accuracy = max(nr_hits) / max(trial)) %>%
+      slice_tail(n = 1) %>%
+      select(angle, trial, accuracy)
+  })
+})
+
+output_names <- paste0(tools::file_path_sans_ext(daten_namen), "_accuracies.csv")
+
+# For each architecture (5 total)
+for (i in seq_along(results_nested)) {
+  
+  # Get all epochs for this architecture
+  epochs_list <- results_nested[[i]]
+  
+  # Add an epoch column to each epoch data frame
+  epochs_list <- map2(epochs_list, seq_along(epochs_list), \(df, epoch_num) {
+    mutate(df, epoch = epoch_num)
+  })
+  
+  # Combine all epochs into one data frame
+  architecture_df <- bind_rows(epochs_list)
+  
+  write.csv(architecture_df, file = output_names[i], row.names = FALSE)
+}
+
+
+
+```
+
+
