@@ -17,50 +17,62 @@ import optuna
 def extract_model_name(filename: str) -> str:
     return os.path.splitext(filename)[0]
 
-# Define class for storing optuna parameters to rebuild optimized models
-@dataclass
-class ModelParams:
-    model_name: str
-    training_type: str  # "diverse" or "prototype"
-    suggested_freeze: int
-    dropout_rate: float
-    lr: float
-    weight_decay: float
-    algorithm: str
-    momentum: float
+class ModelParams():
+    "Stores name and place pairs"
+    def __init__(self, model_name, training_type, suggested_freeze, dropout_rate, lr, weight_decay, algorithm, momentum, nesterov):
+        self.model_name = str(model_name)
+        self.training_type = str(training_type)
+        self.suggested_freeze = int(suggested_freeze)
+        self.dropout_rate = float(dropout_rate)
+        self.lr = float(lr)
+        self.weight_decay = float(weight_decay)
+        self.algorithm = str(algorithm)
+        self.momentum = float(momentum)
+        self.nesterov = bool(nesterov)
 
-# get the model parameter
-def load_model_params_from_folder(folder: str, training_type: str) -> List[ModelParams]:
+def load_model_params_from_folder(folder: str, training_type: str):
+                                  
     db_files = [f for f in os.listdir(folder) if f.endswith(".db")]
     model_params_list = []
 
     for db_file in db_files:
         db_path = os.path.join(folder, db_file)
         storage_url = f"sqlite:///{db_path}"
-        try:
-            try:
-                study = optuna.load_study(study_name="optuna_study", storage=storage_url)
-            except KeyError:
-                study = optuna.load_study(study_name=None, storage=storage_url)
+        study = optuna.load_study(study_name=None, storage=storage_url)
 
-            best = study.best_trial
-            params = best.params
+        best = study.best_trial
+        params = best.params
+        momentum = "momentum"
+        match params["algorithm"]:
+            case "Adadelta":
+                lr = "lr_Adadelta"
+                weight_decay = "weight_decay_Adadelta"
+            case "Adam":
+                lr = "lr_Adam"
+                weight_decay = "weight_decay_Adam"
+            case "AdamW":
+                lr = "lr_AdamW"
+                weight_decay = "weight_decay_AdamW"
+            case SGD:
+                lr = "lr_SGD"
+                weight_decay = "weight_decay_SGD"
+                momentum = "momentum_SGD"
 
-            model_param = ModelParams(
-                model_name=extract_model_name(db_file),
-                training_type=training_type,
-                suggested_freeze=int(params["suggested_freeze"]),
-                dropout_rate=float(params["dropout_rate"]),
-                lr=float(params["lr"]),
-                weight_decay=float(params["weight_decay"]),
-                algorithm=params["algorithm"],
-                momentum=float(params["momentum"])
-            )
-            model_params_list.append(model_param)
-        except Exception as e:
-            print(f"❌ Error loading {db_file}: {e}")
+        extraction = ModelParams(
+            model_name=extract_model_name(db_file),
+            training_type=training_type,
+            suggested_freeze=params["suggested_freeze"],
+            dropout_rate=params["dropout_rate"],
+            lr=params[lr],
+            weight_decay=params.get(weight_decay, 0),
+            algorithm=params["algorithm"],
+            momentum=params.get(momentum, 0),
+            nesterov=params.get("nesterov_SGD", False)
+        )
+        model_params_list.append(extraction)
 
     return model_params_list
+
 
 
 def freezer(model, suggested_freeze):

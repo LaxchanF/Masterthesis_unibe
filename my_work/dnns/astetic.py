@@ -46,10 +46,10 @@ for idx, file in enumerate(csv_files[:1]):  # Limit to first 5 files
     fig = plt.figure(figsize=(10, 7), constrained_layout=True)
     ax = fig.add_subplot(projection="3d")
     
-    # # Loop through colors for epochs creating points 
-    # for i, (epoch, group) in enumerate(df.groupby('epoch')):
-    #     ax.scatter(group['accuracy'], group['angle'], [epoch]*len(group),
-    #             color=c_list(i), label=f'Epoch {epoch}', alpha=0.9)
+    # Loop through colors for epochs creating points 
+    for i, (epoch, group) in enumerate(df.groupby('epoch')):
+        ax.scatter(group['accuracy'], group['angle'], [epoch]*len(group),
+                color=c_list(i), label=f'Epoch {epoch}', alpha=0.9)
         
 
     # --- Plot lines within each epoch ---
