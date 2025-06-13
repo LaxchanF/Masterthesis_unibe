@@ -232,7 +232,7 @@ prototype_across_test
 ```
 # Save as .png
 
-```{r}
+```{r
 
 library(patchwork)
 wrap_plots(Training_accuracy_plots) %>% 

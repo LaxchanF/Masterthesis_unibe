@@ -30,6 +30,14 @@ class ModelParams():
         self.momentum = float(momentum)
         self.nesterov = bool(nesterov)
 
+    def __repr__(self):
+        return (
+    f"ModelParams(model_name='{self.model_name}', training_type='{self.training_type}', "
+    f"suggested_freeze={self.suggested_freeze}, dropout_rate={self.dropout_rate}, "
+    f"lr={self.lr}, weight_decay={self.weight_decay}, algorithm='{self.algorithm}', "
+    f"momentum={self.momentum}, nesterov={self.nesterov})"
+        )
+    
 def load_model_params_from_folder(folder: str, training_type: str):
                                   
     db_files = [f for f in os.listdir(folder) if f.endswith(".db")]

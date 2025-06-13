@@ -1,0 +1,133 @@
+ModelParams(model_name='vgg16_diverse_final_study',
+
+ training_type='diverse',
+
+ suggested_freeze=27,
+
+ dropout_rate=0.1819264275106262,
+
+ lr=0.00014148216799222266,
+
+ weight_decay=0.026630380676319763,
+
+ algorithm='Adam',
+
+ momentum=0.0,
+
+ nesterov=False)
+ModelParams(model_name='alexnet_diverse_final_study',
+
+ training_type='diverse',
+
+ suggested_freeze=13,
+
+ dropout_rate=0.17701394167817608,
+
+ lr=8.201655771972812e-05,
+
+ weight_decay=0.002534956396330706,
+
+ algorithm='AdamW',
+
+ momentum=0.0,
+
+ nesterov=False)
+ModelParams(model_name='convnext_diverse_final_study',
+
+ training_type='diverse',
+
+ suggested_freeze=2,
+
+ dropout_rate=0.0792093523119217,
+
+ lr=8.588408461176659e-05,
+
+ weight_decay=0.0018374590026966455,
+
+ algorithm='AdamW',
+
+ momentum=0.0,
+
+ nesterov=False)
+ModelParams(model_name='efficientnet_diverse_final_study',
+
+ training_type='diverse',
+
+ suggested_freeze=1,
+
+ dropout_rate=0.022720368417259898,
+
+ lr=0.00027019343020403457,
+
+ weight_decay=0.001515950741951454,
+
+ algorithm='AdamW',
+
+ momentum=0.0,
+
+ nesterov=False)
+ModelParams(model_name='resnet_diverse_final_study',
+
+ training_type='diverse',
+
+ suggested_freeze=3,
+
+ dropout_rate=0.36715664716593815,
+
+ lr=6.115153805247766e-05,
+
+ weight_decay=0.0011512298721695086,
+
+ algorithm='AdamW',
+
+ momentum=0.0,
+
+ nesterov=False)
+ModelParams(model_name='vgg16_prototype_final_study',
+
+ training_type='prototype',
+
+ suggested_freeze=29,
+
+ dropout_rate=0.13280757631443965,
+ lr=0.00013953546977550017,
+ weight_decay=0.001196188316820091,
+ algorithm='AdamW',
+ momentum=0.0,
+ nesterov=False)
+ModelParams(model_name='alexnet_prototype_final_study',
+ training_type='prototype',
+ suggested_freeze=1,
+ dropout_rate=0.49450928435744584,
+ lr=3.2813856334991265e-05,
+ weight_decay=0.0028378069877034264,
+ algorithm='AdamW',
+ momentum=0.0,
+ nesterov=False)
+ModelParams(model_name='convnext_prototype_final_study',
+ training_type='prototype',
+ suggested_freeze=0,
+ dropout_rate=0.13489675270223705,
+ lr=0.0001426812358237795,
+ weight_decay=0.0020032019942583966,
+ algorithm='AdamW',
+ momentum=0.0,
+ nesterov=False)
+ModelParams(model_name='efficientnet_prototype_final_study',
+ training_type='prototype',
+ suggested_freeze=1,
+ dropout_rate=0.19783187442659475,
+ lr=0.000453252828161282,
+ weight_decay=0.0012131676427823669,
+ algorithm='AdamW',
+ momentum=0.0,
+ nesterov=False)
+ModelParams(model_name='resnet_prototype_final_study',
+ training_type='prototype',
+ suggested_freeze=4,
+ dropout_rate=0.1254225815301659,
+ lr=0.00011165934998839477,
+ weight_decay=0.0156528310194628,
+ algorithm='Adam',
+ momentum=0.0,
+ nesterov=False)
