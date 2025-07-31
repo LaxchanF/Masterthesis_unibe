@@ -17,6 +17,15 @@ library(tidyverse)
 library(gridExtra)
 library(here)
 library(gtsummary)
+library(patchwork)
+library(cowplot)
+library(dplyr)
+library(boot)
+library(purrr)
+library(stringr)
+library(tidyr)
+library(gt)
+library(viridis)
 ```
 
 
@@ -46,27 +55,21 @@ myfiles
 training <- map(myfiles, \(x) filter(x, phase=="train") %>% #Extract training Data
                group_by(run, epoch) %>% #Group dataset into 20 runs and in every run make groups of 6 because of epochs
                mutate(hit = if_else(ground_truth == prediction, 1, 0), # 1 if Predictions is equal to ground truth, else 0
-           nr_of_hits_in_this_epoch= cumsum(hit == 1), # Count right predicions on the go 
-           trials= seq_along(along.with = epoch), # Count number of pictures shown to architecture in respective epoch
-           running_percentage = nr_of_hits_in_this_epoch/trials, # Calculate acuracy after each picture
-           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) # Calculate avg accuracy in each epoch 
+                      trials = seq_along(epoch),
+           percentage_epochs = mean(hit))) # Calculate avg accuracy in each epoch 
 
-training_sliced <- map(training, \(x) slice(x, max(trials))) #slicing last computed accuracy per epoch 
-
-
-train_epoch_avg <- map(training_sliced, \(x) select(x, run, epoch, percentage_epochs) %>% 
+train_epoch_avg <- map(training, \(x) select(x, run, epoch, percentage_epochs) %>% 
       group_by(epoch) %>% 
       mutate(avg = mean(percentage_epochs)) %>% select(epoch, avg) %>% 
     unique())
 
+training_sliced <- map(training, \(x) slice(x, max(trials)))
 
 testing <- map(myfiles, \(x) filter(x, phase=="test") %>%
                group_by(run, epoch) %>%
                mutate(hit = if_else(ground_truth == prediction, 1, 0),
-           nr_of_hits_in_this_epoch= cumsum(hit == 1), 
-           trials= seq_along(along.with = epoch), 
-           running_percentage = nr_of_hits_in_this_epoch/trials, 
-           percentage_epochs = max(nr_of_hits_in_this_epoch) / max(trials))) 
+                      trials = seq_along(epoch),
+              percentage_epochs = mean(hit))) 
 
 
 testing_sliced <- map(testing, \(x) slice(x, max(trials)))
@@ -81,7 +84,7 @@ test_epoch_avg <- map(testing_sliced, \(x) select(x, run, epoch, percentage_epoc
 
 ## List of Plots
 ### Accuracy Training Plots
-```{r}
+```{r eval=FALSE, include=FALSE}
 name_training <- names(training) %>% 
   str_replace(pattern = "_", replacement = " \nTrainingsphase: ")
 
@@ -102,7 +105,7 @@ Training_accuracy_plots <- pmap(list(training_sliced, name_training, train_epoch
 ```
 
 ### Accuracy Testing Plots
-```{r}
+```{r eval=FALSE, include=FALSE}
 name_testing <- names(testing) %>% 
   str_replace(pattern = "_", replacement = " \nTestphase: ")
 
@@ -121,7 +124,7 @@ Testing_accuracy_plots <- pmap(list(testing_sliced, name_testing, test_epoch_avg
 ```
 
 #testing analyze
-```{r}
+```{r eval=FALSE, include=FALSE}
 ood1 <- ".ood1" 
 ood1bool <- map(myfiles, \(x) pull(x, image_name) %>%  str_detect(ood1))
 ood1_raw <- map2(myfiles, ood1bool, \(x,y) ungroup(x) %>% filter(y))
@@ -202,7 +205,7 @@ iid_avg <- map(iid_slice, \(x) select(x, run, epoch, percentage_epochs) %>%
     unique())
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 
 name_ood1 <- names(testing) %>% 
   str_replace(pattern = "_", replacement = " \nCategory: OOD1 \nTestphase: ")
@@ -269,12 +272,9 @@ iid_plots <-  pmap(list(iid_slice, name_iid, iid_avg), \(x, y, z) ggplot(x, aes(
       )
 ```
 
-### Work in progres
-
-
 # Saving Plots as png
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 
 library(patchwork)
 wrap_plots(Training_accuracy_plots) %>% 
@@ -317,95 +317,778 @@ wrap_plots(iid_plots) %>%
         units = "cm") #hier Name ändern
 
 ```
+
 ##Show all results in one Plot
+## Bootstrap confidence intervalls
 ```{r}
+library(dplyr)
+library(purrr)
+library(tibble)
+library(boot)
+library(ggplot2)
+
+# ----------------------------------------
+# Define bootstrap function (per group)
+boot_accuracy <- function(data, indices) {
+  sampled_data <- data[indices, ]
+  mean(sampled_data$hit)
+}
+
+
+bootstrap_group <- function(df_group, R = 1000) {
+  boot_res <- boot(df_group, boot_accuracy, R = R)
+  ci <- boot.ci(boot_res, type = "perc")
+  tibble(
+    epoch = unique(df_group$epoch),
+    acc = mean(df_group$hit),
+    ci_lower = ci$percent[4],
+    ci_upper = ci$percent[5]
+  )
+}
+
+# ----------------------------------------
+# Function to process each architecture dataframe
+set.seed(42)
+
+bootstrap_architecture <- function(df_arch, arch_name, R = 1000) {
+  df_arch %>%
+    group_by(epoch) %>%
+    group_split() %>%
+    map_dfr(~bootstrap_group(.x, R = R)) %>%
+    mutate(architecture = arch_name)
+}
+
+# ----------------------------------------
+# General function to process full list
+process_list <- function(data_list, R = 1000) {
+  # Extract architecture names from list names
+  arch_names <- names(data_list)
+  
+  # Apply bootstrap function across list
+  map2_dfr(data_list, arch_names, ~bootstrap_architecture(.x, .y, R = R))
+}
+
+# ----------------------------------------
+# Now apply to your two lists:
+
+# Example:
+# train_list <- list(alexnet_diverse = ..., resnet_prototype = ..., etc.)
+# test_list <- list(...)
+
+# Compute results for train and test
+train_results <- process_list(training, R = 1000) %>%
+  mutate(phase = "train") %>% group_by(architecture) %>% nest()
+
+test_results <- process_list(testing, R = 1000) %>%
+  mutate(phase = "test") %>% group_by(architecture) %>% nest()
+
+# Combine both into one dataframe
+full_results <- bind_rows(train_results, test_results)
+
+```
+
+
+
+# ```{r}
+# ggplot(full_results, aes(x = epoch, y = acc, color = phase)) +
+#   geom_line() +
+#   geom_point() +
+#   geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper, fill = phase), alpha = 0.2) +
+#   geom_hline(yintercept = 1/3, linetype = "dashed", color = "black") +
+#   facet_wrap(~architecture, scales = "free_y") +
+#   theme_minimal(base_size = 16)
+# 
+# ```
+
+```{r}
+set.seed(42)
 
 ##in work
 name_training <- names(training) %>% 
   str_replace(pattern = "_", replacement = " \nTraining data: ")
 
+
+name_training[3] <- "default alexnet \nTraining data: prototype"
+name_training[6] <- "default convnext \nTraining data: prototype"
+name_training[9] <- "default efficientnet \nTraining data: prototype"
+name_training[12] <- "default resnet \nTraining data: prototype" 
+name_training[15] <- "default vgg16 \nTraining data: prototype"  
+
 final_plots <- pmap(
-  list(training_sliced, name_training, train_epoch_avg, testing_sliced, test_epoch_avg),
-  \(train_data, model_name, train_avg, test_data, test_avg) {
+  list(name_training, training_sliced, testing_sliced, train_results$data, test_results$data, train_epoch_avg, test_epoch_avg),
+  \(x, y, z, a, b, c, d){
     ggplot() +
       # Jittered points for training
-      geom_jitter(data = train_data, 
-                  aes(x = as.factor(epoch), y = percentage_epochs, color = "Training"), 
-                  width = 0.1, seed = 42, alpha = 0.5, size = 1.5) +
-      # Jittered points for testing
-      geom_jitter(data = test_data, 
-                  aes(x = as.factor(epoch), y = percentage_epochs, color = "Testing"), 
-                  width = 0.1, seed = 42, alpha = 0.5, size = 1.5) +
-      # Avg points for training
-      geom_point(data = train_avg, 
-                 aes(x = as.factor(epoch), y = avg, shape = "Training Avg"), 
-                 color = "#1f77b4", size = 3, show.legend = FALSE) +
-      # Avg points for testing
-      geom_point(data = test_avg, 
-                 aes(x = as.factor(epoch), y = avg, shape = "Testing Avg"), 
-                 color = "#ff7f0e", size = 3, show.legend = FALSE) +
-      # Line for training avg
-      geom_line(data = train_avg, 
-                aes(x = epoch, y = avg, color = "Train Trend"), 
-                size = 1) +
-      # Line for testing avg
-      geom_line(data = test_avg, 
-                aes(x = epoch, y = avg, color = "Test Trend"), 
-                size = 1) +
+      geom_jitter(data = y, 
+                  aes(x = as.factor(epoch), y = percentage_epochs, color = "Train"), 
+                  width = 0.1, alpha = 0.5, size = 1.5) +
+      # Jittered points for Test
+      geom_jitter(data = z, 
+                  aes(x = as.factor(epoch), y = percentage_epochs, color = "Test"), 
+                  width = 0.1, alpha = 0.5, size = 1.5) +
+      
+      # Training average points
+      geom_point(data = c,
+                 aes(x = as.factor(epoch), y = avg, shape = "Train"),
+                 color = "#0072B2", size = 3) +
+      
+      # Test average points
+      geom_point(data = d,
+                 aes(x = as.factor(epoch), y = avg, shape = "Test"),
+                 color = "#D55E00", size = 3) +
+      # Training value label at epoch 6
+geom_text(data = filter(c, epoch == 6),
+          aes(x = as.factor(epoch), y = avg, label = sprintf("%.2f", avg)),
+          vjust = 2, hjust=1, color = "#0072B2", fontface = "bold", size = 5) +
+
+# Test value label at epoch 6
+geom_text(data = filter(d, epoch == 6),
+          aes(x = as.factor(epoch), y = avg, label = sprintf("%.2f", avg)),
+          vjust = 2, hjust=1,  color = "#D55E00", fontface = "bold", size = 5) +
+
+
+      # Confidence intervals (ribbons)
+      geom_ribbon(data = a, aes(x = epoch, y = acc, ymin = ci_lower, ymax = ci_upper, fill = "Train"), alpha = 0.3) +
+      geom_ribbon(data = b, aes(x = epoch, y = acc, ymin = ci_lower, ymax = ci_upper, fill = "Test"), alpha = 0.3) +
+
       # Horizontal benchmark line
-      geom_hline(yintercept = 1/3, colour = "black", size = 1, linetype = "dashed") +
+      geom_hline(yintercept = 1/3, colour = "red", size = 1, linetype = "dashed") +
+      
+      # Color legend for jittered points
       scale_color_manual(
         values = c(
-          "Training" = "#1f77b4",       # Blue
-          "Testing" = "#ff7f0e",        # Orange
-          "Train Trend" = "#1f77b4",
-          "Test Trend" = "#ff7f0e"
+          "Train" = "#56B4E9",  # lighter blue for jitter
+          "Test"  = "#E69F00"   # lighter orange for jitter
         ),
-        name = "Legend"
+        name = "Empirical Data (20 runs):"
       ) +
-         scale_shape_manual(
-        values = c("Training Avg" = 17, "Testing Avg" = 18),
-        name = "Legend"
+
+      # Shape legend for averages
+      scale_shape_manual(
+        values = c("Train" = 17, "Test" = 15),
+        name = "Averages per Epoch:"
       ) +
-      theme_minimal(base_size = 14) +
+
+      # Fill legend for confidence intervals
+      scale_fill_manual(
+        values = c(
+          "Train" = scales::alpha("#0072B2", 0.3),
+          "Test"  = scales::alpha("#D55E00", 0.3)
+        ),
+        name = "95% CI (bootstrap, n=1000):"
+      ) +
+
+      theme_gray(base_size = 14) +
       labs(
-        title = paste0("Architecture: ", model_name),
+        title = paste0("Architecture: ", x),
         x = "Epoch",
         y = "Accuracy"
       ) +
       scale_y_continuous(expand = c(0, 0), limits = c(0, 1.1)) +
       theme(
-        legend.position = "bottom",
+        legend.title = element_text(size=14, face = "bold"),
+        legend.text = element_text(size=14, face = "bold"),
+        legend.position = "top",
         legend.box = "horizontal",
-        panel.grid.minor = element_blank()
+        panel.grid.minor = element_blank(),
+        axis.text = element_text(face="bold"),
+        axis.text.x = element_text(face="bold", size=12),
+        axis.text.y = element_text(face="bold", size=12),
+        axis.title = element_text(size=12, face="bold"),
+        plot.title = element_text(size=12, face="bold")
       )
   }
 )
 
+final_plots[1]
 ```
 
 ## Save oben
 ```{r}
+p <- wrap_plots(final_plots)+plot_layout(guides='collect', ncol = 3) & theme(legend.box.background = element_rect(),
+        legend.box.margin = margin(6, 6, 6, 6),
+         legend.position = "bottom")
 
-library(patchwork)
-wrap_plots(final_plots, guides = 'collect', ncol = 5)
-
-p <- wrap_plots(final_plots)+ plot_layout(nrow = 5, guides = 'collect') & theme(legend.position = 'bottom')
-
+ 
 p %>% 
-ggsave(filename="test_plots.png", 
+ggsave(dpi = 300,
+       filename="final_default_trend_proto_plots.png", 
         height = 40,
-        width = 30,
+        width = 38,
         units = "cm") #hier Name ändern
 ```
 
+## table
+```{r}
+# Initialisieren
+i = 1
+name_vector = c()
+training_accuracy = c()
+
+for(x in train_epoch_avg){
+  name_vector[i] <- names(train_epoch_avg)[i]
+  temp <- x %>% ungroup() %>% select(avg) %>% slice(6) %>% as.double()
+  training_accuracy[i] <- temp
+  i <- i + 1
+}
+
+i = 1
+testing_accuracy = c()
+
+for(x in test_epoch_avg){
+  name_vector[i] <- names(test_epoch_avg)[i]
+  temp <- x %>% ungroup() %>% select(avg) %>% slice(6) %>% as.double()
+  testing_accuracy[i] <- temp
+  i <- i + 1
+}
+
+# Zusammenführen
+df <- data.frame(name_vector, training_accuracy, testing_accuracy)
+
+# Architektur extrahieren
+df <- df %>%
+  mutate(architecture = str_extract(name_vector, "^[^_]+"))
+
+# Zusammenfassung berechnen
+df_summary <- df %>%
+  group_by(architecture) %>%
+  summarise(mean_training = mean(training_accuracy, na.rm = TRUE),
+            mean_testing = mean(testing_accuracy, na.rm = TRUE)) %>%
+  ungroup()
+
+# Tabelle in gewünschtes Format bringen
+df_long <- df_summary %>%
+  pivot_longer(cols = c(mean_training, mean_testing),
+               names_to = "metric",
+               values_to = "mean_accuracy") %>%
+  mutate(metric = recode(metric,
+                         "mean_training" = "Training phase",
+                         "mean_testing" = "Testing phase")) %>%
+  pivot_wider(names_from = architecture, values_from = mean_accuracy) %>%
+  rename(`Mean Accuracy` = metric)
+
+df_long <- add_row(df_long,
+                   `Mean Accuracy` = "Model weights",
+                   alexnet = 57016131,
+                   convnext = 87569539,
+                   efficientnet =52862199,
+                   resnet = 23514179,
+                   vgg16 = 134272835)
+```
 
 
+```{r}
+# Tabelle mit gt darstellen
+my_table <- df_long %>%
+  gt() %>%
+  fmt_number(
+    columns = where(is.numeric),
+    decimals = 4
+  ) %>%
+  fmt_number(
+    columns = where(is.numeric),
+    rows = nrow(df_long),  # last row by row index
+    decimals = 0,
+    use_seps = TRUE
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = where(is.numeric)
+  ) %>%
+  tab_header(
+    title = "Mean accuracy and architecture size"
+  ) %>%
+  tab_options(
+    table.font.names = "Times New Roman",
+    heading.title.font.size = 12,
+    heading.subtitle.font.size = 10,
+    table.font.size = 11,
+    column_labels.font.weight = "bold",
+    data_row.padding = px(4)
+  )
 
 
+gtsave(my_table, "model_performance.png")
+```
+
+```{r}
+# Extract parameters row
+param_row <- df_long %>%
+  filter(`Mean Accuracy` == "Model weights") %>%
+  select(-`Mean Accuracy`) %>%
+  unlist() %>%
+  as.numeric()
+
+# Extract training and testing rows
+train_row <- df_long %>%
+  filter(`Mean Accuracy` == "Training phase") %>%
+  select(-`Mean Accuracy`) %>%
+  unlist() %>%
+  as.numeric()
+
+test_row <- df_long %>%
+  filter(`Mean Accuracy` == "Testing phase") %>%
+  select(-`Mean Accuracy`) %>%
+  unlist() %>%
+  as.numeric()
+
+# Calculate Pearson correlations
+cor_train <- cor(param_row, train_row, use = "complete.obs", method = "pearson")
+cor_test <- cor(param_row, test_row, use = "complete.obs", method = "pearson")
+
+```
+# Training D/P individuell
+```{r}
+# loop d/p je CNN zusm zu nehmen
+lop <- c(1,3,5,7,9)
+for (x in lop) {
+  x+1
+  result <- bind_rows(train_epoch_avg[[x]], train_epoch_avg[[x + 1]]) %>% 
+    group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg)
+  
+  # Assign result to architecture_1, architecture_2, etc.
+  assign(paste0("architecture_", x), result)
+}
+architecture_9
+# berechne abs differenz
+for (x in lop) {
+  var_name <- paste0("architecture_", x)
+  
+  # Get the actual data frame by name using get()
+  df <- get(var_name)
+  
+  # Modify it
+  df <- df %>% mutate(difference = abs(condition1 - condition2))
+  
+    # Rename the columns
+  colnames(df) <- c("Epoch", "Diverse", "Prototype", "Absolute difference")
+  
+  # Assign it back to the original variable name
+  assign(var_name, df)
+}
+
+# Loop um einzelne Tbl zu speichern
+for (i in lop) {
+  var_name <- paste0("architecture_", i)
+  df <- get(var_name)
+  
+  # Create gt table
+  gt_table <- df %>%
+  pivot_longer(
+    cols = -Epoch,
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  pivot_wider(names_prefix = "Epoch ",
+    names_from = Epoch,
+    values_from = Value) %>% 
+    gt() %>%
+    fmt_number(decimals = 3)  %>%
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels(everything())
+    ) %>%
+    opt_table_outline() %>%
+    opt_row_striping()
+
+    # Save gt table as PNG
+  gtsave(gt_table, filename = paste0("architecture_training_", i, ".png"))
+}
+```
+# Training D/P avg
+```{r}
+# full join alle diversen und berechne avg
+  diverse_set <- full_join(train_epoch_avg[[1]], train_epoch_avg[[3]]) %>% 
+  full_join(train_epoch_avg[[5]]) %>% 
+  full_join(train_epoch_avg[[7]]) %>% 
+  full_join(train_epoch_avg[[9]]) %>% 
+   group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg) %>%         mutate(diverse = rowMeans(cbind(condition1, condition2, condition3, condition4, condition5))) %>% 
+  select(epoch, diverse)
+
+# full join alle proto und berechne avg
+  prototype_set<- full_join(train_epoch_avg[[2]], train_epoch_avg[[4]]) %>% 
+  full_join(train_epoch_avg[[6]]) %>% 
+  full_join(train_epoch_avg[[8]]) %>% 
+  full_join(train_epoch_avg[[10]]) %>% 
+   group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg) %>% 
+    mutate(prototype = rowMeans(cbind(condition1, condition2, condition3, condition4, condition5))) %>% 
+    select(epoch, prototype)
+
+  # abs differenz zwischen avg berechnen
+  comparison <- 
+  full_join(diverse_set, prototype_set) %>% 
+    mutate("Absolute difference" = abs(diverse - prototype))
+
+  # umbenennen so dass wie indi passt
+    colnames(comparison) <- c("Epoch", "Diverse", "Prototype", "Absolute difference")
+    
+    # speicchere plots 
+    comparison %>%   pivot_longer(
+    cols = -Epoch,
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  pivot_wider(names_prefix = "Epoch ",
+    names_from = Epoch,
+    values_from = Value) %>% 
+    gt() %>%
+    fmt_number(decimals = 3)%>%
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels(everything())
+    ) %>%
+    opt_table_outline() %>%
+    opt_row_striping() %>% 
+  # Save gt table as PNG
+  gtsave(filename = "d_p_training_comparison.png")
 
 
+  
+```
+
+```{r}
+# Tabelle mit gt darstellen
+my_table <- df_long %>%
+  gt() %>%
+  fmt_number(
+    columns = where(is.numeric),
+    decimals = 4
+  ) %>%
+  fmt_number(
+    columns = where(is.numeric),
+    rows = nrow(df_long),  # last row by row index
+    decimals = 0,
+    use_seps = TRUE
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = where(is.numeric)
+  ) %>%
+  tab_header(
+    title = "Mean accuracy and architecture size"
+  ) %>%
+  tab_options(
+    table.font.names = "Times New Roman",
+    heading.title.font.size = 12,
+    heading.subtitle.font.size = 10,
+    table.font.size = 11,
+    column_labels.font.weight = "bold",
+    data_row.padding = px(4)
+  )
 
 
+gtsave(my_table, "model_performance.png")
+```
 
+```{r}
+# Extract parameters row
+param_row <- df_long %>%
+  filter(`Mean Accuracy` == "Model weights") %>%
+  select(-`Mean Accuracy`) %>%
+  unlist() %>%
+  as.numeric()
+
+# Extract training and testing rows
+train_row <- df_long %>%
+  filter(`Mean Accuracy` == "Training phase") %>%
+  select(-`Mean Accuracy`) %>%
+  unlist() %>%
+  as.numeric()
+
+test_row <- df_long %>%
+  filter(`Mean Accuracy` == "Testing phase") %>%
+  select(-`Mean Accuracy`) %>%
+  unlist() %>%
+  as.numeric()
+
+# Calculate Pearson correlations
+cor_train <- cor(param_row, train_row, use = "complete.obs", method = "pearson")
+cor_test <- cor(param_row, test_row, use = "complete.obs", method = "pearson")
+
+```
+# Testing D/P individuell
+```{r}
+# loop d/p je CNN zusm zu nehmen
+lop <- c(1,3,5,7,9)
+for (x in lop) {
+  result <- bind_rows(test_epoch_avg[[x]], test_epoch_avg[[x + 1]]) %>% 
+    group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg)
+  
+  # Assign result to architecture_1, architecture_2, etc.
+  assign(paste0("architecture_", x), result)
+}
+
+# berechne abs differenz
+for (x in lop) {
+  var_name <- paste0("architecture_", x)
+  
+  # Get the actual data frame by name using get()
+  df <- get(var_name)
+  
+  # Modify it
+  df <- df %>% mutate(difference = abs(condition1 - condition2))
+  
+    # Rename the columns
+  colnames(df) <- c("Epoch", "Diverse", "Prototype", "Absolute difference")
+  
+  # Assign it back to the original variable name
+  assign(var_name, df)
+}
+
+# Loop um einzelne Tbl zu speichern
+for (i in lop) {
+  var_name <- paste0("architecture_", i)
+  df <- get(var_name)
+  
+  # Create gt table
+  gt_table <- df %>%
+  pivot_longer(
+    cols = -Epoch,
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  pivot_wider(names_prefix = "Epoch ",
+    names_from = Epoch,
+    values_from = Value) %>% 
+    gt() %>%
+    fmt_number(decimals = 3)  %>%
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels(everything())
+    ) %>%
+    opt_table_outline() %>%
+    opt_row_striping()
+
+    # Save gt table as PNG
+  gtsave(gt_table, filename = paste0("architecture_testing_", i, ".png"))
+}
+```
+# Training D/P avg
+```{r}
+# full join alle diversen und berechne avg
+  diverse_set <- full_join(test_epoch_avg[[1]], test_epoch_avg[[3]]) %>% 
+  full_join(test_epoch_avg[[5]]) %>% 
+  full_join(test_epoch_avg[[7]]) %>% 
+  full_join(test_epoch_avg[[9]]) %>% 
+   group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg) %>%         mutate(diverse = rowMeans(cbind(condition1, condition2, condition3, condition4, condition5))) %>% 
+  select(epoch, diverse)
+
+# full join alle proto und berechne avg
+  prototype_set<- full_join(test_epoch_avg[[2]], test_epoch_avg[[4]]) %>% 
+  full_join(test_epoch_avg[[6]]) %>% 
+  full_join(test_epoch_avg[[8]]) %>% 
+  full_join(test_epoch_avg[[10]]) %>% 
+   group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg) %>% 
+    mutate(prototype = rowMeans(cbind(condition1, condition2, condition3, condition4, condition5))) %>% 
+    select(epoch, prototype)
+
+  # abs differenz zwischen avg berechnen
+  comparison <- 
+  full_join(diverse_set, prototype_set) %>% 
+    mutate("Absolute difference" = abs(diverse - prototype))
+
+  # umbenennen so dass wie indi passt
+    colnames(comparison) <- c("Epoch", "Diverse", "Prototype", "Absolute difference")
+    
+    # speicchere plots 
+    comparison %>%   pivot_longer(
+    cols = -Epoch,
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  pivot_wider(names_prefix = "Epoch ",
+    names_from = Epoch,
+    values_from = Value) %>% 
+    gt() %>%
+    fmt_number(decimals = 3)%>%
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels(everything())
+    ) %>%
+    opt_table_outline() %>%
+    opt_row_striping() %>% 
+  # Save gt table as PNG
+  gtsave(filename = "d_p_testing_comparison.png")
+
+
+  
+```
+#trouble shooting
+```{r}
+  full_join(test_epoch_avg[[9]], test_epoch_avg[[10]]) %>% 
+    group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg)
+
+
+bind_rows(
+  test_epoch_avg[[9]],
+  test_epoch_avg[[10]])%>% 
+      group_by(grp = cumsum(epoch == 1)) %>%
+    mutate(row = row_number()) %>%
+    ungroup() %>%
+    select(-row) %>%
+    mutate(run = paste0("condition", grp)) %>%
+    select(-grp) %>%
+    pivot_wider(names_from = run, values_from = avg)
+
+```
+## hp optim loading
+```{r}
+# step back in parent dir für file
+setwd("..")
+neuer_root <- getwd()
+temp <- dir(pattern="\\.csv$")
+
+Paths_to_csv <- paste0(neuer_root, "/", temp) # build paths to each file 
+
+all_optuna_files <- map(Paths_to_csv, \(x) read_csv(x)) # Map every csv data to a list
+
+names(all_optuna_files) <- gsub("\\.csv$", "", temp) # Name list of data according 
+
+all_optuna_files
+```
+##hp optim prepare
+```{r}
+optuna_files <- all_optuna_files[1:3]
+
+prototype_index <- c(2,4,6,8,10)
+diverse_index <- c(1,3,5,7,9)
+
+
+optuna_files <- all_optuna_files[prototype_index]
+
+optuna_labeled <- map2(optuna_files, names(optuna_files), \(x, y) mutate(x, algorithm = as.factor(params_algorithm)) %>%
+    select(value, algorithm, params_dropout_rate) %>%
+    mutate(dataset = y))
+
+# Combine into one tibble
+optuna_combined <- bind_rows(optuna_labeled)
+
+optuna_combined$dataset <- sub("_.*", "", optuna_combined$dataset)
+
+
+hp_combined <- optuna_combined %>%
+  group_by(dataset) %>%
+  slice_max(order_by = value, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+optuna_combined
+
+optuna_combined <- optuna_combined %>%
+  anti_join(hp_combined, by = colnames(optuna_combined)) %>% 
+  filter(!is.na(algorithm))
+
+
+```
+
+## hp plotting
+```{r}
+boxplots <- ggplot() +
+  # Boxplots
+  geom_boxplot(data = optuna_combined, aes(x = dataset, y = value), outlier.shape = NA, fill = "gray90") +
+  
+    # Highlight best trials
+  geom_point(
+    data = hp_combined,
+    aes(x = dataset, y = value, shape = algorithm),
+    color = "red",
+    size = 3,
+    show.legend = FALSE# a distinct shape like star or diamond
+  ) +
+  
+  # Jittered scatter points
+  geom_point(
+    data = optuna_combined,
+    aes(x = dataset, y = value, shape = algorithm, colour = params_dropout_rate),
+    position = position_jitter(width = 0.10),
+    alpha = 0.6,
+    size = 2
+  ) +
+
+  
+
+  
+  
+  # Optional: Scales for color/shape
+  scale_color_viridis_c(option = "D") +
+  scale_shape_manual(values = c(16, 17, 18, 15)) +  # customize per your algorithms
+  
+  # Themes and labels
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Prototype",
+    y = "Accuracy (%)",
+    colour = "Dropout Rate",
+    shape = "Algorithm",
+  ) +
+  theme(
+    legend.position = "right")+
+  scale_y_continuous(limits = c(20,90) )
+
+
+boxplots
+```
+## save box
+```{r}
+
+ggsave(
+  filename = "diverse_boxplots.png", 
+  plot = boxplots,
+  dpi = 300,
+  height = 15,
+  width = 15,
+  units = "cm",
+  bg="white"
+)
+```
+## get mid 
+```{r}
+d <- all_optuna_files
+
+median_list <- map(d, \(x) median(x$value, na.rm = TRUE))
+
+map2(d, median_list, \(x,y) filter(x, value == y) %>% slice(1))
+
+```
 
